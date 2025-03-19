@@ -31,7 +31,7 @@ my_printf:
                 mov rbp, rsp                    ; rbp = rsp
                 add rbp, 56                      ; rbp = addr second arg (int stack)
 
-        begin:
+        .begin:
                 mov rdi, r15                    ; rdi = current pointer on Buffer 
                 mov rsi, r14                    ; rsi = current pointer on format str
 
@@ -42,7 +42,7 @@ my_printf:
                 stosb                           ; es:[rdi++] = al
                 loop .copy                      ; if (--rcx) jmp .copy
                 push rcx                        ; save rcx
-                jmp end_switch                  ; if (rcx == 0) jmp. end_switch
+                jmp .end_switch                  ; if (rcx == 0) jmp. end_switch
 
         .switch:
                 lodsb                           ; al = ds:[rsi++] - symbol after '%'
@@ -53,63 +53,17 @@ my_printf:
                 mov r15, rdi                    ; update current pointer on Buffer
 
                 cmp al, '%'                     ; if (al == '%')
-                je .case_percent                ;       jmp .case_percent
+                je print_percent                ;       jmp .case_percent
 
-                sub rax, 'b'                    ; shift rax on value 'b'
-                lea rbx, .labels                ; count shift and 
-                jmp qword [rbx + rax * 8]       ;       jump on this label
-; // rodata
-; прыгать сразу на функции, чтобы не было call 
-        .labels:                                ; transition table
-                dq case_b, case_c, case_d
-                times 'o' - 'd' - 1 dq case_default
-                dq case_o
-                times 's' - 'o' - 1 dq case_default
-                dq case_s
-                times 'x' - 's' - 1 dq case_default
-                dq case_x
+                jmp qword [labels + rax * 8 - 8 * 'b']       ;       jump on this label     
 
-        .case_percent:                           
-                mov rdi, '%'                    ; rdi = symbol for print
-                call print_char                 ; putchar ('%') in Buffer
-                jmp end_switch                  ; break
-
-        case_b:
-                mov ecx, 1                      ; 2 ^ 1 = 2
-                call print_bin_oct_hex          ; print binary number
-                jmp end_switch                  ; break
-        
-        case_c:
-                mov rdi, [rbp]                  ; rdi = symbol for print
-                call print_char                 ; putchar (rdi) in Buffer
-                add rbp, 8                      ; shift up rbp in stack
-                jmp end_switch                  ; break
+        .case_default:
+                jmp .end_switch
                 
-        case_d:
-                call print_dec                  ; print decimal number
-                jmp end_switch                  ; break
-
-        case_o:
-                mov ecx, 3                      ; 2 ^ 3 = 8
-                call print_bin_oct_hex          ; print octal number
-                jmp end_switch                  ; break
-
-        case_s:
-                call print_str                  ; print string
-                jmp end_switch                  ; break
-
-        case_x:
-                mov ecx, 4                      ; 2 ^ 4 = 16
-                call print_bin_oct_hex          ; print hexadecimal number
-                jmp end_switch                  ; break
-
-        case_default:
-                jmp end_switch
-                
-        end_switch:
+        .end_switch:
                 pop rcx                         ; if (rcx != 0)
-                cmp rcx, 0                      ;       jmp begin
-                jne begin
+                cmp rcx, 0                      ;       jmp .begin
+                jne .begin
                 
                 mov rdi, Buffer                 ; rdi = addr for Buffer
                 call my_strlen                  ; count len str in Buffer
@@ -202,7 +156,7 @@ print_dec:
                 pop rbx
                 pop rax
 
-                ret
+                jmp my_printf.end_switch
 
 ;------------------------------------------------
 ;       Parsing line of symbols
@@ -223,7 +177,15 @@ print_str:
                 add rbp, 8                      ; shift up rbp in stack
                 mov r15, rdi                    ; update current pointer on Buffer
 
-                ret
+                jmp my_printf.end_switch
+
+print_percent:
+                mov rdi, '%' 
+                mov rsi, r15                    ; rsi = current pointer on Buffer 
+                mov [rsi], rdi                  ; [rsi] = ASCII code symbol
+                inc r15                         ; update current pointer on Buffer
+
+                jmp my_printf.end_switch
 
 ;------------------------------------------------
 ;       Print one char-symbol in Buffer
@@ -234,11 +196,44 @@ print_str:
 ;------------------------------------------------
 
 print_char:
+                mov rdi, [rbp]                  ; rdi = symbol for print
                 mov rsi, r15                    ; rsi = current pointer on Buffer 
                 mov [rsi], rdi                  ; [rsi] = ASCII code symbol
                 inc r15                         ; update current pointer on Buffer
-                
-                ret
+                add rbp, 8                      ; shift up rbp in stack
+
+                jmp my_printf.end_switch
+
+print_bin:
+                mov ecx, 1
+                jmp print_bin_oct_hex
+
+print_oct:
+                mov ecx, 3
+                jmp print_bin_oct_hex
+
+print_hex:
+                mov ecx, 4
+                jmp print_bin_oct_hex
+
+print_addr:
+                mov rsi, r15
+                mov byte [rsi], '0'
+                inc rsi
+                mov byte [rsi], 'x'
+                add r15, 2
+                mov ecx, 4
+                jmp print_bin_oct_hex
+
+print_n:
+                mov rcx, r15
+                sub rcx, Buffer
+                mov rsi, [rbp]
+                mov [rsi], rcx
+                add rbp, 8
+
+                jmp my_printf.end_switch
+
 
 ;------------------------------------------------
 ;       Parsing bin/oct/hex number system
@@ -296,8 +291,20 @@ print_bin_oct_hex:
                 pop rbx
                 pop rax
 
-                ret
+                jmp my_printf.end_switch
 
+section .rodata
+
+labels:                                ; transition table
+                dq print_bin, print_char, print_dec
+                times 'n' - 'd' - 1 dq my_printf.case_default
+                dq print_n
+                dq print_oct
+                dq print_addr
+                times 's' - 'p' - 1 dq my_printf.case_default
+                dq print_str
+                times 'x' - 's' - 1 dq my_printf.case_default
+                dq print_hex
 
 section .data
 
