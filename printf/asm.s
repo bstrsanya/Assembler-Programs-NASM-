@@ -2,13 +2,48 @@ section .text
 
 global my_printf   
 
-bin_system          equ 1
-oct_system          equ 3
-dec_system          equ 10
-hex_system          equ 4
-size_stack_cell     equ 8
-shift_pointer_stack equ 64
-size_buffer         equ 200
+BIN_SYSTEM          equ 1
+OCT_SYSTEM          equ 3
+DEC_SYSTEM          equ 10
+HEX_SYSTEM          equ 4
+SIZE_STACK_CELL     equ 8
+SHIFT_POINTER_STACK equ 64
+SIZE_BUFFER         equ 200
+MASK_BIN_SYSTEM     equ 0b1
+MASK_OCT_SYSTEM     equ 0b111
+MASK_HEX_SYSTEM     equ 0b1111
+
+;------------------------------------------------
+;       MACROS (output and clean buffer)
+;       Entry: None
+;       Exit : r15 = addr begin buffer
+;       Destr: rax rsi rdi
+;------------------------------------------------
+
+%macro OUTPUT_BUFFER 0
+                push rcx
+
+                mov rcx, r15
+                sub rcx, buffer
+                inc rcx
+
+                mov rdx, rcx                    ; rdx = len str for input
+                mov rax, 0x01                   ; number func output (write = 01)
+                mov rdi, 1                      ; stdout
+                mov rsi, buffer                 ; rsi = addr for buffer
+                syscall
+
+                mov r15, buffer                 ; r15 = addr begin buffer
+
+                pop rcx
+%endmacro
+
+;------------------------------------------------
+;       Push argument and save registers
+;       Entry: None
+;       Exit : None
+;       Destr: r10
+;------------------------------------------------
 
 my_printf:
                 pop r10                         ; save addr return
@@ -29,36 +64,43 @@ my_printf:
 
                 call printf                     ; main func 
 
-                pop r15                         ;recovery registers
+                pop r15                         ; recovery registers
                 pop r14
                 pop r13
                 pop r12
                 pop rbx
                 pop rbp
 
-                pop rdi                         ; recovery registers
+                pop rdi                        
                 pop rsi
                 pop rdx
                 pop rcx
                 pop r8
                 pop r9
 
-                push r10                        ; recovery addr return                 
+                push r10                        ; recovery addr return      
+                           
                 ret
+
+;------------------------------------------------
+;       Main func. Output string
+;       Entry: None
+;       Exit : None
+;       Destr: rax rcx rdi rsi r14 r15
+;------------------------------------------------
 
 printf:
                 cld                             ; flag DF = 0
 
-                mov r15, Buffer                 ; r15 = addr Buffer for output
+                mov r15, buffer                 ; r15 = addr buffer for output
                 mov r14, rdi                    ; r14 = first arg (format line)
                 mov rbp, rsp                    ; rbp = rsp
-                add rbp, shift_pointer_stack    ; rbp = addr second arg (int stack)
+                add rbp, SHIFT_POINTER_STACK    ; rbp = addr second arg (int stack)
 
                 call my_strlen                  ; rcx = len format str from [rdi]
-                dec rcx                         ; delete '\0'
 
         .begin:
-                mov rdi, r15                    ; rdi = current pointer on Buffer 
+                mov rdi, r15                    ; rdi = current pointer on buffer 
                 mov rsi, r14                    ; rsi = current pointer on format str
 
         .copy:
@@ -76,14 +118,18 @@ printf:
                 push rcx                        ; save rcx
 
                 mov r14, rsi                    ; update current pointer on format str
-                mov r15, rdi                    ; update current pointer on Buffer
+                mov r15, rdi                    ; update current pointer on buffer
 
-                cmp al, '%'                     ; if (al == '%')
-                je print_percent                ;       jmp .case_percent
+                cmp al, 'b'                     ; check al
+                jl .case_default                ; 'b' <= al <= 'x'
+                cmp al, 'x'
+                jg .case_default
 
-                jmp qword [labels + rax * 8 - 8 * 'b']       ; jump on this label     
+                jmp qword [jmp_table_specifier + (rax - 'b') * 8]       ; jump on this label
 
         .case_default:
+                cmp al, '%'                     ; if (al == '%')
+                je print_percent                ;       jmp .case_percent
                 jmp .end_switch
                 
         .end_switch:
@@ -91,14 +137,7 @@ printf:
                 cmp rcx, 0                      ;       jmp .begin
                 jne .begin
                 
-                mov rdi, Buffer                 ; rdi = addr for Buffer
-                call my_strlen                  ; count len str in Buffer
-
-                mov rdx, rcx                    ; rdx = len str for input
-                mov rax, 0x01                   ; number func output (write = 01)
-                mov rdi, 1                      ; stdout
-                mov rsi, Buffer                 ; rsi = addr for buffer
-                syscall
+                OUTPUT_BUFFER                   ; macros
 
                 ret
 
@@ -115,32 +154,32 @@ my_strlen:
                 dec rcx                         ; rcx = 0xFF...FF
                 repne scasb                     ; while (rcx-- && byte [rdi++] != al) 
                 neg rcx                         ; rcx = -rcx
-                dec rcx                         ; rcx--
+                sub rcx, 2                      ; rcx -= 2
 
                 ret
 
 ;------------------------------------------------
 ;       Parsing decimal number system
 ;       Entry: rbp - current value on stack
-;              r15 - current pointer on Buffer
+;              r15 - current pointer on buffer
 ;       Exit : None
 ;       Destr: rax rbx rcx rdx rdi 
 ;------------------------------------------------
 
 print_dec:      
                 mov rax, [rbp]                  ; rax - number argument 
-                mov rdi, r15                    ; rdi - current pointer on Buffer 
+                mov rdi, r15                    ; rdi - current pointer on buffer 
 
                 cmp eax, 0                      ; if (eax > 0)
                 jge .positive_num               ;       jmp .positive_num
 
                 neg eax                         ; processing negative num
                 mov byte [rdi], '-'             ; eax = -eax
-                inc rdi                         ; putchar ('-') in Buffer
+                inc rdi                         ; putchar ('-') in buffer
 
         .positive_num:
                 xor rcx, rcx                    ; rcx = 0
-                mov ebx, dec_system             ; ebx = radix decimal
+                mov ebx, DEC_SYSTEM             ; ebx = radix decimal
 
         .get_digit:
                 xor edx, edx                    ; edx = 0
@@ -156,15 +195,15 @@ print_dec:
                 stosb                           ; es:[rdi++] = al
                 loop .put_digit                 ; if (--rcx) jmp .put_digit
 
-                mov r15, rdi                    ; update current pointer on Buffer
-                add rbp, size_stack_cell        ; shift up rbp in stack
+                mov r15, rdi                    ; update current pointer on buffer
+                add rbp, SIZE_STACK_CELL        ; shift up rbp in stack
 
-                jmp printf.end_switch        ; return
+                jmp printf.end_switch           ; return
 
 ;------------------------------------------------
 ;       Parsing line of symbols
 ;       Entry: rbp - current value on stack
-;              r15 - current pointer on Buffer
+;              r15 - current pointer on buffer
 ;       Exit : None
 ;       Destr: rcx rsi rdi
 ;------------------------------------------------
@@ -172,44 +211,72 @@ print_dec:
 print_str:
                 mov rdi, [rbp]                  ; rdi = addr input str
                 call my_strlen                  ; rcx = len input str
-                dec rcx                         ; skip '\0'
 
+                cmp rcx, SIZE_BUFFER            ; if (len str >= SIZE_BUFFER)
+                jge .output_buf_str             ;       jmp .output_buffer_str
+
+                mov rax, SIZE_BUFFER            
+                sub rax, r15
+                add rax, buffer                 ; rax = free space in buffer
+
+                cmp rcx, rax                    ; if (len str >= free space)
+                jge .output_buf                 ;       jmp .OUTPUT_BUFFER
+
+                jmp .write_buffer
+
+        .output_buf_str:
+                OUTPUT_BUFFER                   ; macros 
+                                
+                mov rsi, [rbp]                  ; rsi = addr for buffer
+                mov rdx, rcx                    ; rdx = len str for input
+                mov rax, 0x01                   ; number func output (write = 01)
+                mov rdi, 1                      ; stdout
+                syscall
+
+                add rbp, SIZE_STACK_CELL        ; update current pointer on buffer
+
+                jmp printf.end_switch           ; return
+
+        .output_buf:
+                OUTPUT_BUFFER                   ; macros
+                
+        .write_buffer:
                 mov rsi, [rbp]                  ; rsi = addr input str
-                mov rdi, r15                    ; rdi = current pointer on Buffer 
+                mov rdi, r15                    ; rdi = current pointer on buffer 
                 rep movsb                       ; [rdi++] = [rsi++]
-                add rbp, size_stack_cell        ; shift up rbp in stack
-                mov r15, rdi                    ; update current pointer on Buffer
+                add rbp, SIZE_STACK_CELL        ; shift up rbp in stack
+                mov r15, rdi                    ; update current pointer on buffer
 
-                jmp printf.end_switch        ; return
+                jmp printf.end_switch           ; return
 
 ;------------------------------------------------
 ;       Print symbol '%'
-;       Entry: r15 - current pointer on Buffer
+;       Entry: r15 - current pointer on buffer
 ;       Exit : None
 ;       Destr: rsi rdi
 ;------------------------------------------------
 
 print_percent:
-                mov rdi, '%' 
-                mov rsi, r15                    ; rsi = current pointer on Buffer 
+                mov rdi, '%'
+                mov rsi, r15                    ; rsi = current pointer on buffer 
                 mov [rsi], rdi                  ; [rsi] = ASCII code symbol
-                inc r15                         ; update current pointer on Buffer
+                inc r15                         ; update current pointer on buffer
 
                 jmp printf.end_switch           ; return
 
 ;------------------------------------------------
-;       Print one char-symbol in Buffer
-;       Entry: r15 - current pointer on Buffer
+;       Print one char-symbol in buffer
+;       Entry: r15 - current pointer on buffer
 ;       Exit : None
 ;       Destr: rsi rdi
 ;------------------------------------------------
 
 print_char:
                 mov rdi, [rbp]                  ; rdi = symbol for print
-                mov rsi, r15                    ; rsi = current pointer on Buffer 
+                mov rsi, r15                    ; rsi = current pointer on buffer 
                 mov [rsi], rdi                  ; [rsi] = ASCII code symbol
-                inc r15                         ; update current pointer on Buffer
-                add rbp, size_stack_cell        ; shift up rbp in stack
+                inc r15                         ; update current pointer on buffer
+                add rbp, SIZE_STACK_CELL        ; shift up rbp in stack
 
                 jmp printf.end_switch           ; return
 
@@ -221,66 +288,68 @@ print_char:
 ;------------------------------------------------
 
 print_bin:
-                mov ecx, bin_system                      
+                mov ecx, BIN_SYSTEM      
+                mov r11, MASK_BIN_SYSTEM                
                 jmp print_bin_oct_hex           
-print_oct:                                      ; in these three functions
-                mov ecx, oct_system             ; we pass the values of 
+print_oct:                                      
+                mov ecx, OCT_SYSTEM             ; in these three functions
+                mov r11, MASK_OCT_SYSTEM        ; we pass the values of 
                 jmp print_bin_oct_hex           ; different number systems 
 print_hex:                                      ; and call the general function
-                mov ecx, hex_system
+                mov ecx, HEX_SYSTEM
+                mov r11, MASK_HEX_SYSTEM
                 jmp print_bin_oct_hex
 
 ;------------------------------------------------
 ;       Print address
-;       Entry: r15 - current pointer on Buffer
+;       Entry: r15 - current pointer on buffer
 ;       Exit : None
 ;       Destr: rcx rsi
 ;------------------------------------------------
 
 print_addr:
-                mov rsi, r15                    ; rsi = current pointer on Buffer 
-                mov byte [rsi], '0'             ; mov "0x" in Buffer
+                mov rsi, r15                    ; rsi = current pointer on buffer 
+                mov byte [rsi], '0'             ; mov "0x" in buffer
                 inc rsi 
                 mov byte [rsi], 'x'
-                add r15, 2                      ; update current pointer on Buffer
-                mov ecx, hex_system             ; hex system
+                add r15, 2                      ; update current pointer on buffer
+                mov ecx, HEX_SYSTEM             ; hex system
+                mov r11, MASK_HEX_SYSTEM
 
                 jmp print_bin_oct_hex           ; print value address
 
 ;------------------------------------------------
 ;       Passing the num of printed smb to arg
-;       Entry: r15 - current pointer on Buffer
+;       Entry: r15 - current pointer on buffer
 ;              rbp - current value on stack
 ;       Exit : None
 ;       Destr: rcx rsi
 ;------------------------------------------------
 
 print_n:
-                mov rcx, r15                    ; rcx = current pointer on Buffer 
-                sub rcx, Buffer                 ; rcx = length of the filled buffer
+                mov rcx, r15                    ; rcx = current pointer on buffer 
+                sub rcx, buffer                 ; rcx = length of the filled buffer
                 mov rsi, [rbp]                  ; rsi = addr argument
                 mov [rsi], rcx                  ; argument = rcx
-                add rbp, size_stack_cell        ; shift up rbp in stack
+                add rbp, SIZE_STACK_CELL        ; shift up rbp in stack
 
                 jmp printf.end_switch           ; return
 
 ;------------------------------------------------
 ;       Parsing bin/oct/hex number system
 ;       Entry: rdi - ASCII code symbol
-;              r15 - current pointer on Buffer
+;              r15 - current pointer on buffer
 ;              rcx - log_2(number system)
+;              r11 - mask number system 
 ;       Exit : None
-;       Destr: None
+;       Destr: rax rbx
 ;------------------------------------------------
 
 print_bin_oct_hex:
                 mov rax, [rbp]                  ; rax - number argument 
-                mov rdi, r15                    ; rdi - current pointer on Buffer 
+                mov rdi, r15                    ; rdi - current pointer on buffer 
 
                 xor rbx, rbx                    ; rbx = 0
-                mov r11, 1                      ; r11 = 1
-                shl r11, cl                     ; r11 = r11 * (2 ^ cl)
-                dec r11                         ; r11--        
 
         .get_digit:
                 mov rdx, rax                    ; rdx = rax
@@ -309,14 +378,14 @@ print_bin_oct_hex:
                 stosb                           ; es:[rdi++] = al
                 loop .put_digit                 ; if (--rcx) jmp .put_digit
 
-                mov r15, rdi                    ; update current pointer on Buffer
-                add rbp, size_stack_cell        ; shift up rbp in stack
+                mov r15, rdi                    ; update current pointer on buffer
+                add rbp, SIZE_STACK_CELL        ; shift up rbp in stack
 
                 jmp printf.end_switch           ; return
 
 section .rodata
 
-labels:
+jmp_table_specifier:
                 dq print_bin
                 dq print_char
                 dq print_dec
@@ -331,4 +400,6 @@ labels:
 
 section .data
 
-Buffer: db size_buffer dup(0)
+buffer: db SIZE_BUFFER dup(0)
+
+

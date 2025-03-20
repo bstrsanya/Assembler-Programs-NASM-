@@ -1,3 +1,7 @@
 asm.o
 main.o
 prog
+Makefile
+a.out
+asm.lst
+.vscode
