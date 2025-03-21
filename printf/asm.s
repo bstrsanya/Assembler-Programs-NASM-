@@ -8,10 +8,11 @@ DEC_SYSTEM          equ 10
 HEX_SYSTEM          equ 4
 SIZE_STACK_CELL     equ 8
 SHIFT_POINTER_STACK equ 64
-SIZE_BUFFER         equ 200
+SIZE_BUFFER         equ 32                      ; forbidden to make the buffer smaller than 32 bits
 MASK_BIN_SYSTEM     equ 0b1
 MASK_OCT_SYSTEM     equ 0b111
 MASK_HEX_SYSTEM     equ 0b1111
+ERROR_PRINTF        equ -1
 
 ;------------------------------------------------
 ;       MACROS (output and clean buffer)
@@ -22,10 +23,13 @@ MASK_HEX_SYSTEM     equ 0b1111
 
 %macro OUTPUT_BUFFER 0
                 push rcx
+                push rsi
+                push rdi
 
-                mov rcx, r15
+                mov rcx, r15                    
                 sub rcx, buffer
-                inc rcx
+                add r13, rcx
+                inc rcx                         ; rcx = len str for input
 
                 mov rdx, rcx                    ; rdx = len str for input
                 mov rax, 0x01                   ; number func output (write = 01)
@@ -35,6 +39,8 @@ MASK_HEX_SYSTEM     equ 0b1111
 
                 mov r15, buffer                 ; r15 = addr begin buffer
 
+                pop rdi
+                pop rsi
                 pop rcx
 %endmacro
 
@@ -90,6 +96,7 @@ my_printf:
 ;------------------------------------------------
 
 printf:
+                xor r13, r13                    ; count output smb
                 cld                             ; flag DF = 0
 
                 mov r15, buffer                 ; r15 = addr buffer for output
@@ -114,23 +121,25 @@ printf:
 
         .switch:
                 lodsb                           ; al = ds:[rsi++] - symbol after '%'
-                dec rcx                         ; skip symbol after '%'
+                sub rcx, 2                      ; skip '%' and symbol after '%'
                 push rcx                        ; save rcx
 
                 mov r14, rsi                    ; update current pointer on format str
                 mov r15, rdi                    ; update current pointer on buffer
 
                 cmp al, 'b'                     ; check al
-                jl .case_default                ; 'b' <= al <= 'x'
+                jl .error_case                  ; 'b' <= al <= 'x'
                 cmp al, 'x'
-                jg .case_default
+                jg .error_case
 
                 jmp qword [jmp_table_specifier + (rax - 'b') * 8]       ; jump on this label
 
-        .case_default:
+        .error_case:
                 cmp al, '%'                     ; if (al == '%')
                 je print_percent                ;       jmp .case_percent
-                jmp .end_switch
+
+                mov rax, ERROR_PRINTF
+                ret
                 
         .end_switch:
                 pop rcx                         ; if (rcx != 0)
@@ -138,6 +147,12 @@ printf:
                 jne .begin
                 
                 OUTPUT_BUFFER                   ; macros
+
+                mov rcx, r15                    ; rcx = current pointer on buffer 
+                sub rcx, buffer                 ; rcx = length of the filled buffer
+                add rcx, r13                    ; rcx += r13 (already printed smb);
+                inc rcx                         ; rcx++
+                mov rax, rcx                    ; rax = number output argument
 
                 ret
 
@@ -188,6 +203,18 @@ print_dec:
                 inc rcx                         ; number of digits ++
                 cmp eax, 0                      ; if (eax > 0)
                 jg .get_digit                   ;       jmp .get_digit
+
+                mov rax, SIZE_BUFFER
+                sub rax, r15
+                add rax, buffer                 ; rax = free space in buffer
+
+                cmp rcx, rax                    ; if (len num >= free space)
+                jge .output_buf                 ;       jmp .OUTPUT_BUFFER 
+                jmp .put_digit
+        
+        .output_buf:
+                OUTPUT_BUFFER                   ; macros 
+                mov rdi, r15                    ; update rdi
 
         .put_digit:
                 pop rax                         ; get digit
@@ -257,6 +284,19 @@ print_str:
 ;------------------------------------------------
 
 print_percent:
+                mov rax, SIZE_BUFFER
+                sub rax, r15
+                add rax, buffer                 ; rax = free space in buffer
+
+                mov rcx, 1                      ; 1 symbol
+                cmp rcx, rax                    ; if (len num >= free space)
+                jge .output_buf                 ;       jmp .OUTPUT_BUFFER 
+                jmp .put_smb
+
+        .output_buf:
+                OUTPUT_BUFFER                   ; macros 
+                
+        .put_smb:
                 mov rdi, '%'
                 mov rsi, r15                    ; rsi = current pointer on buffer 
                 mov [rsi], rdi                  ; [rsi] = ASCII code symbol
@@ -272,6 +312,19 @@ print_percent:
 ;------------------------------------------------
 
 print_char:
+                mov rax, SIZE_BUFFER
+                sub rax, r15
+                add rax, buffer                 ; rax = free space in buffer
+
+                mov rcx, 1                      ; 1 symbol
+                cmp rcx, rax                    ; if (len num >= free space)
+                jge .output_buf                 ;       jmp .OUTPUT_BUFFER 
+                jmp .put_smb
+
+        .output_buf:
+                OUTPUT_BUFFER                   ; macros 
+                
+        .put_smb:
                 mov rdi, [rbp]                  ; rdi = symbol for print
                 mov rsi, r15                    ; rsi = current pointer on buffer 
                 mov [rsi], rdi                  ; [rsi] = ASCII code symbol
@@ -308,6 +361,19 @@ print_hex:                                      ; and call the general function
 ;------------------------------------------------
 
 print_addr:
+                mov rax, SIZE_BUFFER
+                sub rax, r15
+                add rax, buffer                 ; rax = free space in buffer
+
+                mov rcx, 2                      ; 2 symbols '0x'
+                cmp rcx, rax                    ; if (len num >= free space)
+                jge .output_buf                 ;       jmp .OUTPUT_BUFFER 
+                jmp .put_smb
+
+        .output_buf:
+                OUTPUT_BUFFER                   ; macros 
+                
+        .put_smb:
                 mov rsi, r15                    ; rsi = current pointer on buffer 
                 mov byte [rsi], '0'             ; mov "0x" in buffer
                 inc rsi 
@@ -329,6 +395,7 @@ print_addr:
 print_n:
                 mov rcx, r15                    ; rcx = current pointer on buffer 
                 sub rcx, buffer                 ; rcx = length of the filled buffer
+                add rcx, r13                    ; rcx += r13 (already printed smb);
                 mov rsi, [rbp]                  ; rsi = addr argument
                 mov [rsi], rcx                  ; argument = rcx
                 add rbp, SIZE_STACK_CELL        ; shift up rbp in stack
@@ -362,6 +429,18 @@ print_bin_oct_hex:
 
                 mov rcx, rbx                    ; rcx = numbers of digit
 
+                mov rax, SIZE_BUFFER
+                sub rax, r15
+                add rax, buffer                 ; rax = free space in buffer
+
+                cmp rcx, rax                    ; if (len num >= free space)
+                jge .output_buf                 ;       jmp .OUTPUT_BUFFER 
+                jmp .put_digit
+        
+        .output_buf:
+                OUTPUT_BUFFER                   ; macros 
+                mov rdi, r15                    ; update rdi
+                
         .put_digit:
                 pop rax                         ; get digit
 
@@ -389,13 +468,13 @@ jmp_table_specifier:
                 dq print_bin
                 dq print_char
                 dq print_dec
-                times 'n' - 'd' - 1 dq printf.case_default
+                times 'n' - 'd' - 1 dq printf.error_case
                 dq print_n
                 dq print_oct
                 dq print_addr
-                times 's' - 'p' - 1 dq printf.case_default
+                times 's' - 'p' - 1 dq printf.error_case
                 dq print_str
-                times 'x' - 's' - 1 dq printf.case_default
+                times 'x' - 's' - 1 dq printf.error_case
                 dq print_hex
 
 section .data

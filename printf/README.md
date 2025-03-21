@@ -14,7 +14,12 @@ Func realized on Nasm x86_64. My function is identical to the standard function 
     ./link.sh asm.s main.c prog
     ./prog
 ```
+## Description
+The my_printf() function writes to stdout the arguments from the arg-list under the control of the string pointed to by the format argument.
 
+The my_printf() function returns the number of characters actually printed. Returning a negative value indicates an error.
+
+The function is implemented in such a way that the minimum buffer size should be 32 bits for maximum performance.
 ## Implemented functionality
 
 | specifier | functional |
